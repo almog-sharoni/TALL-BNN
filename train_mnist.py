@@ -22,10 +22,13 @@ def get_mnist_loaders(batch_size=128, data_dir='./data'):
     """Get MNIST train and test data loaders"""
     train_transform = transforms.Compose([
         transforms.ToTensor(),
+        # Enhanced data augmentation for better generalization
+        # transforms.RandomRotation(10),
+        # transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        # transforms.RandomPerspective(distortion_scale=0.1, p=0.5),
+
         transforms.Normalize((0.1307,), (0.3081,)),  # MNIST normalization  
-        # add augmentation to training data
-        # transforms.RandomHorizontalFlip(),
-        # transforms.RandomRotation(25)
+
     ])
     test_transform = transforms.Compose([
         transforms.ToTensor(),

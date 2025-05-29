@@ -153,11 +153,11 @@ def main():
         print("TALL PARAMETER SWEEP")
         print("="*60)
         
-        flip_probs = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
-        iterations = [16, 32, 64, 128, 256]
-        
+        flip_probs = [0.05, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50] 
+        iterations = [5, 10 , 20 , 30, 40, 50, 100, 200 , 500]
+
         print("Testing all combinations of flip probabilities and iteration counts:")
-        print("Format: \n flip_p | iter_16 | iter_32 | iter_64 | iter_128 | iter_256")
+        print("Format: \n flip_p | " + " | ".join(f"{i:3d} iterations" for i in iterations))
         print("-" * 65)
         
         best_acc = 0

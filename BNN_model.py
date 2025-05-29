@@ -131,6 +131,59 @@ def build_cam4_deep(num_classes: int = 10) -> BinaryMLP:
 def build_cam4_shallow(num_classes: int = 10) -> BinaryMLP:
     return BinaryMLP(hidden_sizes=(128,), num_classes=num_classes)
 
+# Deployment
+# Note: This is a post-training operation, so it should be called after training
+# and before inference. It modifies the model to remove BatchNorm layers.
+def fold_batch_norm(seq):
+    """
+    Folds BatchNorm1d into the preceding BinarizeLinear weight & bias.
+    Call *after* training, in eval() mode.
+    """
+    new = []
+    i = 0
+    while i < len(seq):
+        lin = seq[i];  bn = seq[i+1];  act = seq[i+2]
+        w, b = lin.weight.data, lin.bias
+        gamma, beta = bn.weight.data, bn.bias.data
+        mu, var = bn.running_mean, bn.running_var
+        std = torch.sqrt(var + bn.eps)
+
+        w.mul_(gamma.view(-1, 1) / std.view(-1, 1))
+        if b is None:
+            b = -mu * gamma / std + beta
+        else:
+            b = (b - mu) * gamma / std + beta
+        lin.bias = nn.Parameter(b)
+
+        new += [lin, act]              # BN removed, bias embedded
+        i += 3
+    return nn.Sequential(*new)
+
+def clamp_bn_constants(lin: BinarizeLinear,
+                       C_max: int = 32,      # 16 / 32 / 64 / 128 …
+                       even_only: bool = True):
+    """
+    Turn the FP32 bias produced by `fold_batch_norm` into the
+    integer constant that will be realised with up to C_max
+    extra ±1 cells in hardware.
+    """
+    if lin.bias is None:
+        raise ValueError("fold_batch_norm must run first")
+
+    # 1. round to nearest integer
+    C = torch.round(lin.bias.data)
+
+    # 2. optionally snap to even numbers
+    if even_only:
+        C = 2 * torch.round(C / 2)
+
+    # 3. hard-clip to ±C_max
+    C.clamp_(-C_max, C_max)
+
+    # 4. store back – from this point on the bias *is* the limited BN constant
+    lin.bias.data = C
+    lin.bias.requires_grad_(False)      # freeze
+
 # ---------- quick sanity check --------------------------------------------------
 if __name__ == "__main__":
     net = build_cam4_deep()
