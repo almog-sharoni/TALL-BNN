@@ -1,0 +1,14 @@
+Metric,Value
+C_MAX_Value,32
+Baseline Accuracy,97.3800%
+Clamped Accuracy,96.4300%
+Best TALL Accuracy,96.4500%
+Best Accuracy Overall,96.4500%
+Worst Accuracy,23.6800%
+Mean Accuracy,92.3927%
+Std Deviation,12.0174%
+Range,72.7700%
+Max Improvement from Clamped,0.0200%
+Max Improvement from Baseline,-0.9300%
+Best flip_p,0.25
+Best num_iter,200

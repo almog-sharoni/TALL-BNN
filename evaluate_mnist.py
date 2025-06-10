@@ -82,8 +82,8 @@ def evaluate_model(model, test_loader, device, use_tall=False, verbose=True):
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate trained BNN on MNIST')
-    parser.add_argument('--model-path', type=str, required=True,
-                        help='path to trained model checkpoint')
+    parser.add_argument('--model-path', type=str, required=False,
+                        help='path to trained model checkpoint', default='./bnn_deep_best.pth')
     parser.add_argument('--model-type', type=str, default='deep', choices=['deep', 'shallow'],
                         help='model architecture (default: deep)')
     parser.add_argument('--batch-size', type=int, default=1000,
@@ -153,8 +153,8 @@ def main():
         print("TALL PARAMETER SWEEP")
         print("="*60)
         
-        flip_probs = [0.05, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50] 
-        iterations = [5, 10 , 20 , 30, 40, 50, 100, 200 , 500]
+        flip_probs = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50] 
+        iterations = [1, 5, 10 , 20 , 30, 40, 50, 100, 200 , 500]
 
         print("Testing all combinations of flip probabilities and iteration counts:")
         print("Format: \n flip_p | " + " | ".join(f"{i:3d} iterations" for i in iterations))
@@ -184,7 +184,7 @@ def main():
             print(row_str)
         
         print("-" * 65)
-        print(f"Best combination: flip_p={best_params[0]:.1f}, iter={best_params[1]}, accuracy={best_acc:.2f}%")
+        print(f"Best combination: flip_p={best_params[0]:.2f}, iter={best_params[1]}, accuracy={best_acc:.2f}%")
         
         # Also show individual parameter analysis
         print("\nParameter analysis:")

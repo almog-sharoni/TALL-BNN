@@ -1,0 +1,4 @@
+C_MAX,Model_Type,Accuracy,Improvement_from_Baseline,Improvement_from_Previous
+32,Baseline,97.38,0.0,0.0
+32,Clamped,96.43,-0.9499999999999886,-0.9499999999999886
+32,Best_TALL,96.45,-0.9299999999999926,0.01999999999999602

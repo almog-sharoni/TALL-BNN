@@ -77,7 +77,10 @@ class BinaryMLP(nn.Module):
     def forward(self, x):
         x = x.flatten(1)                    # (B, 784)
         x = self.hidden(x)
-        return self.fc_out(x)
+        if self.training:
+            return self.fc_out(x)  # still FP32 logits
+        else:
+            return binarize(self.fc_out(x))
 
     # expose last-hidden activations so TALL can reuse them
     def features(self, x):
@@ -111,7 +114,7 @@ class TALLClassifier(nn.Module):
         feat = self.backbone.features(x)           # (B, D) before last FC
         B, D = feat.shape
         C = self.backbone.fc_out.out_features
-        votes = torch.zeros(B, C, device=feat.device, dtype=torch.long)
+        votes = torch.zeros(B, C, device=feat.device, dtype=torch.float32)  # signed accumulator
 
         # Pre-binarise the clean feature once for speed
         feat = binarize(feat)
@@ -127,12 +130,10 @@ class TALLClassifier(nn.Module):
             # Convert back to {-1, +1} for linear layer
             flipped = flipped_sign.float() * 2.0 - 1.0
             
-            logits = self.backbone.fc_out(flipped) # still ±1 after binarisation
-            logits = binarize(logits)              # ensure sign (eval mode)
+            logits = self.backbone.fc_out(flipped)  # raw integer logits
             
-            # Count positive votes (logits > 0) - more efficient than float conversion
-            positive_votes = (logits > 0).long()
-            votes += positive_votes
+            # Vote with signed counts (keep magnitude information)
+            votes += logits
 
         return votes.argmax(dim=-1)                # final prediction
 
@@ -194,20 +195,24 @@ class BinarizeLinearWithFoldedBN(nn.Module):
             even_only: If True, clamp to even integers only for hardware efficiency
         """
         with torch.no_grad():
-            # Compute correct FP32 bias: C_j = β_j * sqrt(σ_j² + ε) / γ_j - μ_j
-            std = torch.sqrt(self.bn_var + self.bn_eps)
-            fp32_bias = self.bn_beta * std / self.bn_gamma - self.bn_mean
-            
-            # Handle negative gamma values by flipping weight signs
+            # Handle negative gamma values by flipping weight signs FIRST
             # This keeps binary weights truly ±1 without folding errors
             neg_gamma_mask = (self.bn_gamma < 0)
             if neg_gamma_mask.any():
                 # Flip weights for channels with negative gamma
                 neg_mask = neg_gamma_mask.view(-1, 1)
                 self.weight.data[neg_mask.squeeze(), :] *= -1
-                # Also flip the gamma and bias accordingly
+                # Make gamma positive: γ → |γ|
                 self.bn_gamma.data[neg_gamma_mask] *= -1
-                fp32_bias[neg_gamma_mask] *= -1
+            
+            # Compute correct FP32 bias: C_j = β_j * sqrt(σ_j² + ε) / γ_j - μ_j
+            # This formula is now valid for all channels since γ is positive
+            std = torch.sqrt(self.bn_var + self.bn_eps)
+            
+            # Guard against γ = 0 (avoid divide-by-zero)
+            self.bn_gamma[self.bn_gamma == 0] = 1e-6
+            
+            fp32_bias = self.bn_beta * std / self.bn_gamma - self.bn_mean
             
             # Quantize to integers in range [-c_max, +c_max]
             quantized = torch.clamp(torch.round(fp32_bias), -c_max, c_max)
@@ -345,6 +350,10 @@ def clamp_bn_constants(layer, c_max: int = 32, even_only: bool = True):
     # Compute FP32 reference for comparison
     with torch.no_grad():
         std = torch.sqrt(layer.bn_var + layer.bn_eps)
+        
+        # Guard against γ = 0 (avoid divide-by-zero) 
+        layer.bn_gamma[layer.bn_gamma == 0] = 1e-6
+        
         fp32_bias = layer.bn_beta * std / layer.bn_gamma - layer.bn_mean
         
         # Quantization statistics

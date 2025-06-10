@@ -1,11 +1,11 @@
 {
-  "baseline_accuracy": 97.38,
-  "folded_accuracy": 97.38,
-  "clamped_accuracy": 97.34,
-  "tall_accuracy": 97.18,
+  "baseline_accuracy": 36.07,
+  "folded_accuracy": 36.07,
+  "clamped_accuracy": 33.9,
+  "tall_accuracy": 93.38,
   "best_tall_params": {
     "num_iter": 100,
-    "flip_p": 0.2
+    "flip_p": 0.15
   },
   "hardware_ready": true
 }

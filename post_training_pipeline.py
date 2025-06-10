@@ -23,6 +23,7 @@ import argparse
 import time
 import numpy as np
 import os
+import csv
 from tqdm import tqdm
 from copy import deepcopy
 
@@ -76,13 +77,14 @@ class PostTrainingPipeline:
         correct = 0
         total = 0
         
-        # Wrap with TALL if requested
-        if use_tall and tall_params:
+        # Only wrap with TALL if requested and model is not already a TALLClassifier
+        if use_tall and tall_params and not isinstance(model, TALLClassifier):
             model = TALLClassifier(
                 model, 
                 num_iter=tall_params['num_iter'], 
                 flip_p=tall_params['flip_p']
             ).to(self.device)
+            model.eval()
         
         with torch.no_grad():
             for data, target in self.test_loader:
@@ -170,7 +172,7 @@ class PostTrainingPipeline:
         
         return accuracy
     
-    def stage4_tall_optimization(self, parameter_sweep=True):
+    def stage4_tall_optimization(self, parameter_sweep=True, output_dir=None, c_max=32):
         """Stage 4: Optimize TALL parameters for best performance"""
         self.log("\n" + "="*60)
         self.log("STAGE 4: TALL OPTIMIZATION")
@@ -193,7 +195,7 @@ class PostTrainingPipeline:
         
         # Reduced parameter space for efficiency
         flip_probs = [0.05,0.10,0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
-        iterations = [10, 20, 30, 40, 50, 100]
+        iterations = [1, 5, 10, 20, 30, 40, 50, 100, 200]
         
         best_acc = 0
         best_params = None
@@ -212,6 +214,41 @@ class PostTrainingPipeline:
         
         self.results['tall_accuracy'] = best_acc
         self.results['best_tall_params'] = best_params
+        
+        # Export sweep results to CSV if output directory is provided
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            csv_path = os.path.join(output_dir, f"tall_parameter_sweep_cmax{c_max}.csv")
+            
+            self.log(f"Exporting TALL parameter sweep results to: {csv_path}")
+            
+            # Prepare data for CSV export
+            csv_data = []
+            for (flip_p, num_iter), accuracy in sweep_results.items():
+                csv_data.append({
+                    'flip_p': flip_p,
+                    'num_iter': num_iter,
+                    'accuracy': accuracy,
+                    'baseline_accuracy': self.results['baseline_accuracy'],
+                    'clamped_accuracy': self.results['clamped_accuracy'],
+                    'tall_accuracy': accuracy,
+                    'clamped_to_tall_improvement': accuracy - self.results['clamped_accuracy'],
+                    'baseline_to_tall_improvement': accuracy - self.results['baseline_accuracy'],
+                    'is_best': (flip_p == best_params['flip_p'] and num_iter == best_params['num_iter'])
+                })
+            
+            # Sort by accuracy (descending) for easier analysis
+            csv_data.sort(key=lambda x: x['accuracy'], reverse=True)
+            
+            # Write to CSV
+            with open(csv_path, 'w', newline='') as csvfile:
+                fieldnames = ['flip_p', 'num_iter', 'accuracy', 'baseline_accuracy', 'clamped_accuracy', 
+                             'tall_accuracy', 'clamped_to_tall_improvement', 'baseline_to_tall_improvement', 'is_best']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(csv_data)
+            
+            self.log(f"Exported {len(csv_data)} parameter combinations to CSV")
         
         self.log(f"\nBest TALL parameters: flip_p={best_params['flip_p']:.2f}, iter={best_params['num_iter']}")
         self.log(f"Best TALL accuracy: {best_acc:.4f}%")
@@ -259,7 +296,7 @@ class PostTrainingPipeline:
         
         return output_dir
     
-    def run_full_pipeline(self, c_max=32, even_only=False, tall_sweep=True, output_dir="./hardware_export", checkpoint_path=None):
+    def run_full_pipeline(self, c_max=256, even_only=True, tall_sweep=True, output_dir="./hardware_export", checkpoint_path=None):
         """Run the complete post-training optimization pipeline"""
         self.log("="*60)
         self.log("STARTING COMPLETE POST-TRAINING OPTIMIZATION PIPELINE")
@@ -272,7 +309,7 @@ class PostTrainingPipeline:
             self.stage1_baseline_evaluation()
             self.stage2_batch_norm_folding()
             self.stage3_bias_clamping(c_max, even_only)
-            self.stage4_tall_optimization(tall_sweep)
+            self.stage4_tall_optimization(tall_sweep, output_dir, c_max)
             self.stage5_hardware_export(output_dir, checkpoint_path)
             
             # Final summary
@@ -321,7 +358,7 @@ def main():
     parser.add_argument('--model-type', type=str, default='deep', choices=['deep', 'shallow'],
                         help='model architecture (default: deep)')
     parser.add_argument('--c-max', type=int, default=32,
-                        help='maximum absolute bias constant value (default: 32)')
+                        help='maximum absolute bias constant value (default: 256)')
     parser.add_argument('--no-even-only', action='store_true', default=False,
                         help='allow odd bias constants (default: even only)')
     parser.add_argument('--no-tall-sweep', action='store_true', default=False,
@@ -389,4 +426,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # Ensure reproducibility
+    torch.manual_seed(42)
+    np.random.seed(42)
+    torch.cuda.manual_seed_all(42)
     main()
