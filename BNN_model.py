@@ -21,17 +21,24 @@ class SignSTE(Function):
         return grad
 
 
-def binarize(x):
-    """Deterministic binarisation (+1 / –1)"""
-    return x.sign()
+def binarize(x, threshold: float = 0):
+    """
+    Binarize input tensor to {-1, +1} based on a threshold.
+    Default threshold is 0, but can be adjusted for custom behavior.
+    """
+    return torch.where(x > threshold, torch.tensor(1.0, device=x.device), torch.tensor(-1.0, device=x.device))
 
 
 class BinaryActivation(nn.Module):
+    def __init__(self, threshold: float = 0):
+        super().__init__()
+        self.threshold = threshold
+
     """Hard sign with STE"""
     def forward(self, x):
         if self.training:
             return SignSTE.apply(x)
-        return binarize(x)
+        return binarize(x, self.threshold)
 
 
 class BinarizeLinear(nn.Linear):
@@ -58,15 +65,17 @@ class BinaryMLP(nn.Module):
     def __init__(self,
                  in_features: int = 28 * 28,
                  hidden_sizes: tuple[int, ...] = (4096, 4096, 128),
-                 num_classes: int = 10):
+                 num_classes: int = 10,
+                 thresholds: tuple[float, ...] = None):
         super().__init__()
         layers = []
         prev = in_features
-        for h in hidden_sizes:
+        thresholds = thresholds
+        for i,h in enumerate(hidden_sizes):
             layers += [
                 BinarizeLinear(prev, h, bias=False),
                 nn.BatchNorm1d(h),            # FP32 during training
-                BinaryActivation()
+                BinaryActivation(threshold=thresholds[i] if thresholds else 0)
             ]
             prev = h
 
@@ -138,11 +147,11 @@ class TALLClassifier(nn.Module):
         return votes.argmax(dim=-1)                # final prediction
 
 # ---------- helper factory functions -------------------------------------------
-def build_cam4_deep(num_classes: int = 10) -> BinaryMLP:
-    return BinaryMLP(hidden_sizes=(4096, 4096, 128), num_classes=num_classes)
+def build_cam4_deep(num_classes: int = 10, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds)
 
-def build_cam4_shallow(num_classes: int = 10) -> BinaryMLP:
-    return BinaryMLP(hidden_sizes=(128,), num_classes=num_classes)
+def build_cam4_shallow(num_classes: int = 10, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(hidden_sizes=(128,), num_classes=num_classes, thresholds=thresholds)
 
 
 # ---------- quick sanity check --------------------------------------------------
