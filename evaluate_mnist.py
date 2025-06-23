@@ -113,7 +113,7 @@ def main():
     # Create model
     print(f"Creating {args.model_type} BNN model...")
     if args.model_type == 'deep':
-        model = build_cam4_deep(num_classes=10)
+        model = build_cam4_deep(num_classes=10,thresholds=[0.9,0.9,0.9])
     else:
         model = build_cam4_shallow(num_classes=10)
     

@@ -9,17 +9,17 @@ import math
 class SignSTE(Function):
     """sign(x) with straight-through gradient"""
     @staticmethod
-    def forward(ctx, x):
+    def forward(ctx, x, threshold=0):
         ctx.save_for_backward(x)
-        # Use > 0 to map 0 to -1 (consistent with binarize function)
-        return binarize(x)  # maps to {-1, +1} based on threshold
+        # Use threshold parameter for binary activation, default to 0 for weights
+        return binarize(x, threshold)  # maps to {-1, +1} based on threshold
 
     @staticmethod
     def backward(ctx, g):
         (x,) = ctx.saved_tensors
         grad = g.clone()
         grad[x.abs() > 1] = 0.0         # clamp outside (-1,1)
-        return grad
+        return grad, None  # None for threshold parameter gradient
 
 
 def binarize(x, threshold: float = 0):
@@ -39,7 +39,7 @@ class BinaryActivation(nn.Module):
     """Hard sign with STE"""
     def forward(self, x):
         if self.training:
-            return SignSTE.apply(x)
+            return SignSTE.apply(x, self.threshold)
         return binarize(x, self.threshold)
 
 

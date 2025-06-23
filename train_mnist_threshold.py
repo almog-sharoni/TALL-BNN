@@ -178,9 +178,9 @@ def main():
     # Create model
     print(f"Creating {args.model} BNN model...")
     if args.model == 'deep':
-        backbone = build_cam4_deep(num_classes=10, threshold_percentages=[0.9, 0.9, 0.9])
+        backbone = build_cam4_deep(num_classes=10, thresholds=[0.9, 0.9, 0.9])
     else:
-        backbone = build_cam4_shallow(num_classes=10, threshold_percentages=[0.9])
+        backbone = build_cam4_shallow(num_classes=10, thresholds=[0.9])
     
     model = backbone.to(device)
     
