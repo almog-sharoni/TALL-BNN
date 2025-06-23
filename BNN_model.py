@@ -11,7 +11,8 @@ class SignSTE(Function):
     @staticmethod
     def forward(ctx, x):
         ctx.save_for_backward(x)
-        return x.sign()
+        # Use > 0 to map 0 to -1 (consistent with binarize function)
+        return binarize(x)  # maps to {-1, +1} based on threshold
 
     @staticmethod
     def backward(ctx, g):
@@ -25,6 +26,7 @@ def binarize(x, threshold: float = 0):
     """
     Binarize input tensor to {-1, +1} based on a threshold.
     Default threshold is 0, but can be adjusted for custom behavior.
+    Now maps 0 to -1 (uses >= instead of > for threshold comparison).
     """
     return torch.where(x > threshold, torch.tensor(1.0, device=x.device), torch.tensor(-1.0, device=x.device))
 
@@ -66,7 +68,8 @@ class BinaryMLP(nn.Module):
                  in_features: int = 28 * 28,
                  hidden_sizes: tuple[int, ...] = (4096, 4096, 128),
                  num_classes: int = 10,
-                 thresholds: tuple[float, ...] = None):
+                 thresholds: tuple[float, ...] = None,
+                 fully_binary: bool = False):
         super().__init__()
         layers = []
         prev = in_features
@@ -78,15 +81,15 @@ class BinaryMLP(nn.Module):
                 BinaryActivation(threshold=thresholds[i] if thresholds else 0)
             ]
             prev = h
-
         self.hidden = nn.Sequential(*layers)
         self.fc_out = BinarizeLinear(prev, num_classes, bias=False)
+        self.fully_binary = fully_binary
 
     # forward that returns raw logits (sign outputs, ±1) – useful for TALL
     def forward(self, x):
         x = x.flatten(1)                    # (B, 784)
         x = self.hidden(x)
-        if self.training:
+        if not self.fully_binary:
             return self.fc_out(x)  # still FP32 logits
         else:
             return binarize(self.fc_out(x))
@@ -95,6 +98,7 @@ class BinaryMLP(nn.Module):
     def features(self, x):
         x = x.flatten(1)
         return self.hidden(x)
+    
 
 # ---------- Time-Augmented Last Layer (TALL) voting -----------------------------
 class TALLClassifier(nn.Module):
@@ -147,12 +151,17 @@ class TALLClassifier(nn.Module):
         return votes.argmax(dim=-1)                # final prediction
 
 # ---------- helper factory functions -------------------------------------------
-def build_cam4_deep(num_classes: int = 10, thresholds: tuple[float, ...] = None) -> BinaryMLP:
-    return BinaryMLP(hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds)
+def build_cam4_deep(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds)
 
-def build_cam4_shallow(num_classes: int = 10, thresholds: tuple[float, ...] = None) -> BinaryMLP:
-    return BinaryMLP(hidden_sizes=(128,), num_classes=num_classes, thresholds=thresholds)
+def build_cam4_shallow(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(128,), num_classes=num_classes, thresholds=thresholds)
 
+def build_cam4_deep_fully_binary(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds, fully_binary=True)
+
+def build_cam4_shallow_fully_binary(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(128,), num_classes=num_classes, thresholds=thresholds, fully_binary=True)
 
 # ---------- quick sanity check --------------------------------------------------
 if __name__ == "__main__":
