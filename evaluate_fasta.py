@@ -710,7 +710,7 @@ def main():
                        help='Train ratio (must match training)')
     parser.add_argument('--device', default='auto',
                        help='Device to use (auto, cpu, cuda)')
-    parser.add_argument('--output_dir', default='./',
+    parser.add_argument('--output_dir', default='./fasta_results',
                        help='Directory to save evaluation results')
     
     # NEW: Inference-only data loading option
