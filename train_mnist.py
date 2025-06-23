@@ -23,9 +23,9 @@ def get_mnist_loaders(batch_size=128, data_dir='./data'):
     train_transform = transforms.Compose([
         transforms.ToTensor(),
         # Enhanced data augmentation for better generalization
-        # transforms.RandomRotation(10),
-        # transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-        # transforms.RandomPerspective(distortion_scale=0.1, p=0.5),
+        transforms.RandomRotation(10),
+        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        transforms.RandomPerspective(distortion_scale=0.1, p=0.5),
 
         transforms.Normalize((0.1307,), (0.3081,)),  # MNIST normalization  
 
@@ -54,7 +54,7 @@ def get_mnist_loaders(batch_size=128, data_dir='./data'):
 
 def train_epoch(model, train_loader, optimizer, criterion, device):
     """Train for one epoch"""
-    model.train()
+    model.train()  # Sets model to training mode (using floating point operations)
     running_loss = 0.0
     correct = 0
     total = 0
@@ -97,9 +97,15 @@ def train_epoch(model, train_loader, optimizer, criterion, device):
     return epoch_loss, epoch_acc
 
 
-def evaluate(model, test_loader, device, use_tall=False):
+def evaluate(model, test_loader, device, use_tall=False, use_training_mode=False):
     """Evaluate the model on test set"""
-    model.eval()
+    if use_training_mode:
+        # Keep model in training mode but don't compute gradients
+        model.train()  # Keep in training mode to match training behavior
+    else:
+        # Use evaluation mode (fully binarized)
+        model.eval()
+    
     correct = 0
     total = 0
     
@@ -217,12 +223,12 @@ def main():
         train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, device)
         train_time = time.time() - start_time
         
-        # Evaluate
+        # Evaluate using the same model mode as in training
         start_time = time.time()
         if args.use_tall:
-            test_acc = evaluate(tall_model, test_loader, device, use_tall=True)
+            test_acc = evaluate(tall_model, test_loader, device, use_tall=True, use_training_mode=True)
         else:
-            test_acc = evaluate(model, test_loader, device, use_tall=False)
+            test_acc = evaluate(model, test_loader, device, use_tall=False, use_training_mode=True)
         eval_time = time.time() - start_time
         
         # Update learning rate
@@ -231,7 +237,7 @@ def main():
         
         # Print epoch results
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-        print(f"Test Acc: {test_acc:.2f}%")
+        print(f"Test Acc (Training Mode): {test_acc:.2f}%  # Using same model mode as training")
         print(f"LR: {current_lr:.6f}")
         print(f"Time - Train: {train_time:.1f}s, Eval: {eval_time:.1f}s")
         
@@ -252,13 +258,18 @@ def main():
     print(f"\nTraining completed!")
     print(f"Best test accuracy: {best_acc:.2f}%")
     
+    # Final evaluation with fully binarized model
+    print("\nFinal evaluation with fully binarized model...")
+    binary_acc = evaluate(model, test_loader, device, use_tall=False, use_training_mode=False)
+    print(f"Fully Binarized Test Accuracy: {binary_acc:.2f}%")
+    
     # Final evaluation with TALL if not used during training
     if not args.use_tall:
         print("\nEvaluating with TALL voting...")
         tall_model = TALLClassifier(
             model, num_iter=args.tall_iter, flip_p=args.tall_flip_p
         ).to(device)
-        tall_acc = evaluate(tall_model, test_loader, device, use_tall=True)
+        tall_acc = evaluate(tall_model, test_loader, device, use_tall=True, use_training_mode=False)
         print(f"TALL Test Accuracy: {tall_acc:.2f}%")
 
 

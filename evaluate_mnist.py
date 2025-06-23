@@ -13,7 +13,7 @@ import time
 import numpy as np
 from tqdm import tqdm
 
-from BNN_model import BinaryMLP, TALLClassifier, build_cam4_deep, build_cam4_shallow
+from BNN_model import BinaryMLP, TALLClassifier, build_cam4_deep_fully_binary, build_cam4_shallow_fully_binary
 
 
 def get_mnist_test_loader(batch_size=1000, data_dir='./data'):
@@ -113,10 +113,10 @@ def main():
     # Create model
     print(f"Creating {args.model_type} BNN model...")
     if args.model_type == 'deep':
-        model = build_cam4_deep(num_classes=10)
+        model = build_cam4_deep_fully_binary(num_classes=10)
     else:
-        model = build_cam4_shallow(num_classes=10)
-    
+        model = build_cam4_shallow_fully_binary(num_classes=10)
+
     # Load trained weights
     print(f"Loading model from {args.model_path}...")
     checkpoint = torch.load(args.model_path, map_location=device)
