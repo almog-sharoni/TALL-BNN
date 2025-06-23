@@ -9,57 +9,37 @@ import math
 class SignSTE(Function):
     """sign(x) with straight-through gradient"""
     @staticmethod
-    def forward(ctx, x, threshold=0.0):
+    def forward(ctx, x):
         ctx.save_for_backward(x)
-        # Use threshold to map values to {-1, +1}
-        return binarize(x, threshold)  # maps to {-1, +1} based on threshold
+        # Use > 0 to map 0 to -1 (consistent with binarize function)
+        return binarize(x)  # maps to {-1, +1} based on threshold
 
     @staticmethod
     def backward(ctx, g):
         (x,) = ctx.saved_tensors
         grad = g.clone()
         grad[x.abs() > 1] = 0.0         # clamp outside (-1,1)
-        return grad, None  # None for threshold parameter
+        return grad
 
 
 def binarize(x, threshold: float = 0):
     """
     Binarize input tensor to {-1, +1} based on a threshold.
-    For popcount-based thresholds, threshold represents the minimum number
-    of positive values required in each sample.
+    Default threshold is 0, but can be adjusted for custom behavior.
+    Now maps 0 to -1 (uses >= instead of > for threshold comparison).
     """
-    if threshold == 0:
-        # Standard elementwise binarization
-        return torch.where(x > 0, torch.tensor(1.0, device=x.device), torch.tensor(-1.0, device=x.device))
-    else:
-        # Popcount-based binarization
-        # For each sample, check if popcount >= threshold
-        batch_size = x.shape[0]
-        result = torch.zeros_like(x)
-        
-        for i in range(batch_size):
-            sample = x[i]
-            popcount = torch.sum(sample > 0).float()
-            
-            if popcount >= threshold:
-                # If popcount meets threshold, keep positive values as +1, others as -1
-                result[i] = torch.where(sample > 0, torch.tensor(1.0, device=x.device), torch.tensor(-1.0, device=x.device))
-            else:
-                # If popcount doesn't meet threshold, set all to -1
-                result[i] = torch.tensor(-1.0, device=x.device)
-                
-        return result
+    return torch.where(x > threshold, torch.tensor(1.0, device=x.device), torch.tensor(-1.0, device=x.device))
 
 
 class BinaryActivation(nn.Module):
-    def __init__(self, threshold: float = 0.0):
+    def __init__(self, threshold: float = 0):
         super().__init__()
         self.threshold = threshold
 
     """Hard sign with STE"""
     def forward(self, x):
         if self.training:
-            return SignSTE.apply(x, self.threshold)
+            return SignSTE.apply(x)
         return binarize(x, self.threshold)
 
 
@@ -69,17 +49,13 @@ class BinarizeLinear(nn.Linear):
     During the forward pass we copy self.weight so that PyTorch autograd
     still owns an FP32 tensor to update.
     """
-    def __init__(self, in_features, out_features, bias=True, threshold=0.0):
-        super().__init__(in_features, out_features, bias)
-        self.threshold = threshold
-        
     def forward(self, x):
         if self.training:
-            w_bin = SignSTE.apply(self.weight)  # No threshold for weights
-            x_bin = SignSTE.apply(x, self.threshold)  # Threshold only for input
+            w_bin = SignSTE.apply(self.weight)
+            x_bin = SignSTE.apply(x)
         else:
-            w_bin = binarize(self.weight)  # No threshold for weights
-            x_bin = binarize(x, self.threshold)  # Threshold only for input
+            w_bin = binarize(self.weight)
+            x_bin = binarize(x)
         return F.linear(x_bin, w_bin, self.bias)
 
 # ---------- backbone network ----------------------------------------------------
@@ -92,33 +68,17 @@ class BinaryMLP(nn.Module):
                  in_features: int = 28 * 28,
                  hidden_sizes: tuple[int, ...] = (4096, 4096, 128),
                  num_classes: int = 10,
-                 threshold_percentages: tuple[float, ...] = None,
+                 thresholds: tuple[float, ...] = None,
                  fully_binary: bool = False):
         super().__init__()
         layers = []
         prev = in_features
-        
-        # If threshold_percentages not provided, use default of 50% for all layers
-        if threshold_percentages is None:
-            threshold_percentages = tuple(0.5 for _ in range(len(hidden_sizes)))
-        elif len(threshold_percentages) != len(hidden_sizes):
-            raise ValueError(f"Number of threshold_percentages ({len(threshold_percentages)}) must match number of hidden layers ({len(hidden_sizes)})")
-            
-        # Convert percentage thresholds to actual popcount thresholds for each layer
-        actual_thresholds = []
-        layer_input_sizes = [in_features] + list(hidden_sizes[:-1])  # Input size for each layer
-        
-        for i, (h, input_size) in enumerate(zip(hidden_sizes, layer_input_sizes)):
-            # For binary inputs {-1, +1}, popcount ranges from 0 to input_size
-            # Convert percentage to actual threshold: percentage * input_size
-            actual_threshold = threshold_percentages[i] * input_size
-            actual_thresholds.append(actual_threshold)
-            
-        for i, h in enumerate(hidden_sizes):
+        thresholds = thresholds
+        for i,h in enumerate(hidden_sizes):
             layers += [
-                BinarizeLinear(prev, h, bias=False, threshold=actual_thresholds[i]),
+                BinarizeLinear(prev, h, bias=False),
                 nn.BatchNorm1d(h),            # FP32 during training
-                BinaryActivation(threshold=actual_thresholds[i])
+                BinaryActivation(threshold=thresholds[i] if thresholds else 0)
             ]
             prev = h
         self.hidden = nn.Sequential(*layers)
@@ -191,17 +151,17 @@ class TALLClassifier(nn.Module):
         return votes.argmax(dim=-1)                # final prediction
 
 # ---------- helper factory functions -------------------------------------------
-def build_cam4_deep(num_classes: int = 10, in_features: int = 28 * 28, threshold_percentages: tuple[float, ...] = None) -> BinaryMLP:
-    return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, threshold_percentages=threshold_percentages)
+def build_cam4_deep(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds)
 
-def build_cam4_shallow(num_classes: int = 10, in_features: int = 28 * 28, threshold_percentages: tuple[float, ...] = None) -> BinaryMLP:
-    return BinaryMLP(in_features=in_features, hidden_sizes=(128,), num_classes=num_classes, threshold_percentages=threshold_percentages)
+def build_cam4_shallow(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(128,), num_classes=num_classes, thresholds=thresholds)
 
-def build_cam4_deep_fully_binary(num_classes: int = 10, in_features: int = 28 * 28, threshold_percentages: tuple[float, ...] = None) -> BinaryMLP:
-    return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, threshold_percentages=threshold_percentages, fully_binary=True)
+def build_cam4_deep_fully_binary(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds, fully_binary=True)
 
-def build_cam4_shallow_fully_binary(num_classes: int = 10, in_features: int = 28 * 28, threshold_percentages: tuple[float, ...] = None) -> BinaryMLP:
-    return BinaryMLP(in_features=in_features, hidden_sizes=(128,), num_classes=num_classes, threshold_percentages=threshold_percentages, fully_binary=True)
+def build_cam4_shallow_fully_binary(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
+    return BinaryMLP(in_features=in_features, hidden_sizes=(128,), num_classes=num_classes, thresholds=thresholds, fully_binary=True)
 
 # ---------- quick sanity check --------------------------------------------------
 if __name__ == "__main__":
@@ -225,11 +185,10 @@ class BinarizeLinearWithFoldedBN(nn.Module):
     2. Hardware mode: Integer bias constants C_j ∈ [-c_max, +c_max]
     """
     
-    def __init__(self, in_features, out_features, weight, bn_gamma, bn_beta, bn_mean, bn_var, bn_eps=1e-5, threshold=0.0):
+    def __init__(self, in_features, out_features, weight, bn_gamma, bn_beta, bn_mean, bn_var, bn_eps=1e-5):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.threshold = threshold
         
         # Binary weights (unchanged from original BinarizeLinear)
         self.weight = nn.Parameter(weight)
@@ -302,13 +261,13 @@ class BinarizeLinearWithFoldedBN(nn.Module):
             self.bias = None
         
     def forward(self, x):
-        # Step 1: Binarize input and weights (threshold only for input)
+        # Step 1: Binarize input and weights (same as BinarizeLinear)
         if self.training:
-            x_bin = SignSTE.apply(x, self.threshold)  # Threshold only for input
-            w_bin = SignSTE.apply(self.weight)  # No threshold for weights
+            x_bin = SignSTE.apply(x)
+            w_bin = SignSTE.apply(self.weight)
         else:
-            x_bin = binarize(x, self.threshold)  # Threshold only for input
-            w_bin = binarize(self.weight)  # No threshold for weights
+            x_bin = binarize(x)
+            w_bin = binarize(self.weight)
         
         # Step 2: Linear transformation (no bias)
         out = F.linear(x_bin, w_bin, None)
