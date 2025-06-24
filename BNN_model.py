@@ -154,7 +154,7 @@ class TALLClassifier(nn.Module):
             confident = votes.max(dim=-1).values >= need
             pred     = torch.where(confident,
                                 pred,
-                                torch.full_like(pred, -1))   # abstain on low tally
+                                torch.full_like(pred, -1))   # -1 for no decision
 
         return pred
 # ---------- helper factory functions -------------------------------------------

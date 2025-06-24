@@ -98,6 +98,8 @@ def main():
                         help='directory with MNIST data')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disable CUDA')
+    parser.add_argument('--majority-threshold', type=float, default=0.5,
+                        help='TALL majority voting threshold (default: 0.5)')
     
     args = parser.parse_args()
     
@@ -145,8 +147,7 @@ def main():
         binary_model.load_state_dict(checkpoint['model_state_dict'])
         binary_model = binary_model.to(device)
         tall_model = TALLClassifier(
-            binary_model, num_iter=args.tall_iter, flip_p=args.tall_flip_p, majority_threshold=0.95
-        ).to(device)
+            binary_model, num_iter=args.tall_iter, flip_p=args.tall_flip_p, majority_threshold=args.majority_threshold).to(device)
         tall_acc, _ = evaluate_model(tall_model, test_loader, device, use_tall=True)
         
         print(f"\nComparison:")
@@ -174,7 +175,7 @@ def main():
         for flip_p in flip_probs:
             row_results = []
             for num_iter in iterations:
-                tall_model = TALLClassifier(binary_model, num_iter=num_iter, flip_p=flip_p, majority_threshold=0.95).to(device)
+                tall_model = TALLClassifier(binary_model, num_iter=num_iter, flip_p=flip_p, majority_threshold=args.majority_threshold).to(device)
                 acc, _ = evaluate_model(tall_model, test_loader, device, use_tall=True, verbose=False)
                 row_results.append(acc)
                 results[(flip_p, num_iter)] = acc
