@@ -9,17 +9,17 @@ import math
 class SignSTE(Function):
     """sign(x) with straight-through gradient"""
     @staticmethod
-    def forward(ctx, x):
+    def forward(ctx, x, threshold=0):
         ctx.save_for_backward(x)
-        # Use > 0 to map 0 to -1 (consistent with binarize function)
-        return binarize(x)  # maps to {-1, +1} based on threshold
+        # Use threshold parameter for binary activation, default to 0 for weights
+        return binarize(x, threshold)  # maps to {-1, +1} based on threshold
 
     @staticmethod
     def backward(ctx, g):
         (x,) = ctx.saved_tensors
         grad = g.clone()
         grad[x.abs() > 1] = 0.0         # clamp outside (-1,1)
-        return grad
+        return grad, None  # None for threshold parameter gradient
 
 
 def binarize(x, threshold: float = 0):
@@ -39,7 +39,7 @@ class BinaryActivation(nn.Module):
     """Hard sign with STE"""
     def forward(self, x):
         if self.training:
-            return SignSTE.apply(x)
+            return SignSTE.apply(x, self.threshold)
         return binarize(x, self.threshold)
 
 
@@ -109,47 +109,54 @@ class TALLClassifier(nn.Module):
     def __init__(self,
                  backbone: BinaryMLP,
                  num_iter: int = 30,
-                 flip_p: float = 0.30):
+                 flip_p: float = 0.30,
+                 majority_threshold: float = 0.5
+                 ):
         super().__init__()
         assert 0.0 <= flip_p <= 1.0
         self.backbone = backbone
         self.num_iter = num_iter
         self.flip_p = flip_p
+        self.majority_threshold = majority_threshold
 
     @torch.no_grad()
     def forward(self, x):
         """
-        Returns predicted class indices (shape: [batch]).  
-        Majority is implemented by counting +1s for each class across iterations.
-        
-        Optimized version using boolean operations instead of float arithmetic.
+        TALL vote exactly as in the paper:
+        – bit-flip augmentation of the last-hidden activations
+        – binary FC inference
+        – count a +1 vote for every column that outputs +1
         """
-        feat = self.backbone.features(x)           # (B, D) before last FC
-        B, D = feat.shape
-        C = self.backbone.fc_out.out_features
-        votes = torch.zeros(B, C, device=feat.device, dtype=torch.float32)  # signed accumulator
+        feat = binarize(self.backbone.features(x))            # (B, D) ∈ {-1,+1}
+        B, _ = feat.shape
+        C     = self.backbone.fc_out.out_features
 
-        # Pre-binarise the clean feature once for speed
-        feat = binarize(feat)
-        feat_sign = feat > 0  # Convert to boolean mask for efficient operations
+        # votes[b, c] = how many passes produced +1 on output column c
+        votes = torch.zeros(B, C, dtype=torch.int32, device=feat.device)
 
         for _ in range(self.num_iter):
-            # Boolean mask: True where we flip the sign
-            flip_mask = torch.rand_like(feat, dtype=torch.float32) < self.flip_p
-            
-            # Apply flips: XOR with flip mask (True flips sign, False keeps it)
-            flipped_sign = feat_sign ^ flip_mask
-            
-            # Convert back to {-1, +1} for linear layer
-            flipped = flipped_sign.float() * 2.0 - 1.0
-            
-            logits = self.backbone.fc_out(flipped)  # raw integer logits
-            
-            # Vote with signed counts (keep magnitude information)
-            votes += logits
+            # --- 1. random bit-flip ------------------------------------------------
+            flip_mask   = torch.rand_like(feat) < self.flip_p   # Bernoulli(p)
+            flipped     = feat.clone()
+            flipped[flip_mask] *= -1
 
-        return votes.argmax(dim=-1)                # final prediction
+            # --- 2. binary FC ------------------------------------------------------
+            logits = self.backbone.fc_out(flipped)              # ints in [-D, D]
 
+            # --- 3. tally every +1 -------------------------------------------------
+            votes += (logits > 0).int()                         # one vote per +1
+
+        # -------- final decision ---------------------------------------------------
+        pred = votes.argmax(dim=-1)                             # most votes wins
+
+        if self.majority_threshold is not None:
+            need     = int(self.num_iter * self.majority_threshold)
+            confident = votes.max(dim=-1).values >= need
+            pred     = torch.where(confident,
+                                pred,
+                                torch.full_like(pred, -1))   # abstain on low tally
+
+        return pred
 # ---------- helper factory functions -------------------------------------------
 def build_cam4_deep(num_classes: int = 10, in_features: int = 28 * 28, thresholds: tuple[float, ...] = None) -> BinaryMLP:
     return BinaryMLP(in_features=in_features, hidden_sizes=(4096, 4096, 128), num_classes=num_classes, thresholds=thresholds)
