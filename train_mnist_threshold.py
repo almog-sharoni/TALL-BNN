@@ -158,6 +158,8 @@ def main():
                         help='save the current model')
     parser.add_argument('--data-dir', type=str, default='./data',
                         help='directory to store MNIST data')
+    parser.add_argument('--model-save-path', type=str, default=None,
+                        help='custom path or name to save the trained model (default: bnn_<model>_best.pth)')
     
     args = parser.parse_args()
     
@@ -245,7 +247,10 @@ def main():
         if test_acc > best_acc:
             best_acc = test_acc
             if args.save_model:
-                model_name = f"bnn_{args.model}_best.pth"
+                if args.model_save_path:
+                    model_name = args.model_save_path
+                else:
+                    model_name = f"bnn_{args.model}_best.pth"
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),

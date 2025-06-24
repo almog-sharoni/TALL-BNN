@@ -13,7 +13,7 @@ import time
 import numpy as np
 from tqdm import tqdm
 
-from BNN_model import BinaryMLP, TALLClassifier, build_cam4_deep_fully_binary, build_cam4_shallow_fully_binary
+from BNN_model import BinaryMLP, TALLClassifier, build_cam4_deep, build_cam4_shallow, build_cam4_deep_fully_binary, build_cam4_shallow_fully_binary
 
 
 def get_mnist_test_loader(batch_size=1000, data_dir='./data'):
@@ -137,8 +137,15 @@ def main():
         print("\n" + "="*60)
         print("TALL VOTING INFERENCE")
         print("="*60)
+        if args.model_type == 'deep':
+            binary_model = build_cam4_deep_fully_binary(num_classes=10)
+        else:
+            binary_model = build_cam4_shallow_fully_binary(num_classes=10)
+
+        binary_model.load_state_dict(checkpoint['model_state_dict'])
+        binary_model = binary_model.to(device)
         tall_model = TALLClassifier(
-            model, num_iter=args.tall_iter, flip_p=args.tall_flip_p
+            binary_model, num_iter=args.tall_iter, flip_p=args.tall_flip_p, majority_threshold=0.95
         ).to(device)
         tall_acc, _ = evaluate_model(tall_model, test_loader, device, use_tall=True)
         
@@ -153,11 +160,11 @@ def main():
         print("TALL PARAMETER SWEEP")
         print("="*60)
         
-        flip_probs = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50] 
-        iterations = [1, 5, 10 , 20 , 30, 40, 50, 100, 200 , 500]
+        flip_probs = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45] 
+        iterations = [1, 5, 10 , 20 , 30, 40, 50, 100]
 
         print("Testing all combinations of flip probabilities and iteration counts:")
-        print("Format: \n flip_p | " + " | ".join(f"{i:3d} iterations" for i in iterations))
+        print("Format: \n flip_p | " + " | ".join(f"{i:3d}" for i in iterations))
         print("-" * 65)
         
         best_acc = 0
@@ -167,7 +174,7 @@ def main():
         for flip_p in flip_probs:
             row_results = []
             for num_iter in iterations:
-                tall_model = TALLClassifier(model, num_iter=num_iter, flip_p=flip_p).to(device)
+                tall_model = TALLClassifier(binary_model, num_iter=num_iter, flip_p=flip_p, majority_threshold=0.95).to(device)
                 acc, _ = evaluate_model(tall_model, test_loader, device, use_tall=True, verbose=False)
                 row_results.append(acc)
                 results[(flip_p, num_iter)] = acc
